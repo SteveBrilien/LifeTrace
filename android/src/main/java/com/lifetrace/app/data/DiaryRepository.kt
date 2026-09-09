@@ -42,11 +42,13 @@ class DiaryRepository(
     private val dao: DiaryDao,
     private val mediaStorage: MediaStorage,
     private val cloudMirror: CloudMirror,
+    private val durableBackup: DurableBackupStore,
 ) {
     val entries: Flow<List<DiaryEntry>> = dao.observeAll().map { rows ->
         rows.map { it.toModel() }
     }
     val cloudStatus = cloudMirror.status
+    val durableStatus = durableBackup.status
 
     suspend fun save(request: SaveDiaryRequest): String {
         val now = System.currentTimeMillis()
@@ -120,12 +122,18 @@ class DiaryRepository(
             ?.map { it.toModel() }
             .orEmpty()
         mediaStorage.deleteFiles(removed)
-        dao.getById(entryId)?.toModel()?.let { cloudMirror.backupEntry(it) }
+        dao.getById(entryId)?.toModel()?.let { saved ->
+            durableBackup.backupEntry(saved)
+            cloudMirror.backupEntry(saved)
+        }
         return entryId
     }
 
     suspend fun delete(id: String) {
-        dao.getById(id)?.toModel()?.let { cloudMirror.archiveDeleted(it) }
+        dao.getById(id)?.toModel()?.let { entry ->
+            durableBackup.archiveDeleted(entry)
+            cloudMirror.archiveDeleted(entry)
+        }
         dao.deleteEntry(id)
         mediaStorage.deleteEntryDirectory(id)
     }
@@ -136,6 +144,39 @@ class DiaryRepository(
     }
 
     fun disconnectCloudMirror() = cloudMirror.disconnect()
+
+    suspend fun refreshDurableStorageAccess(): Int {
+        if (!durableBackup.refreshAccess()) return 0
+        val current = dao.getAll()
+        if (current.isNotEmpty()) {
+            durableBackup.mirrorAll(current.map { it.toModel() })
+            return 0
+        }
+        val backups = durableBackup.readEntries()
+        backups.forEach { backup ->
+            val photos = mediaStorage.importBackupPhotos(backup.id, backup.photos)
+            dao.replaceEntry(
+                DiaryEntryEntity(
+                    id = backup.id,
+                    body = backup.body,
+                    occurredAt = backup.occurredAt,
+                    createdAt = backup.createdAt,
+                    updatedAt = backup.updatedAt,
+                    latitude = backup.latitude,
+                    longitude = backup.longitude,
+                    placeLabel = backup.placeLabel,
+                ),
+                photos,
+            )
+        }
+        durableBackup.reportRestore(backups.size)
+        return backups.size
+    }
+
+    suspend fun syncDurableBackup() {
+        if (!durableBackup.refreshAccess()) return
+        durableBackup.mirrorAll(dao.getAll().map { it.toModel() })
+    }
 
     private fun DiaryWithPhotos.toModel() = DiaryEntry(
         id = entry.id,

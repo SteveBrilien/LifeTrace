@@ -21,6 +21,11 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
         initialValue = emptyList(),
     )
     val cloudStatus = repository.cloudStatus
+    val durableStatus = repository.durableStatus
+
+    init {
+        viewModelScope.launch { repository.refreshDurableStorageAccess() }
+    }
 
     fun save(
         request: SaveDiaryRequest,
@@ -41,11 +46,25 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         viewModelScope.launch {
             runCatching { repository.configureCloudMirror(uri, folderName) }
-                .onFailure { onError(it.message ?: "云盘目录连接失败") }
+                .onFailure { onError(it.message ?: "外部目录连接失败") }
         }
     }
 
     fun disconnectCloudMirror() = repository.disconnectCloudMirror()
+
+    fun refreshDurableStorageAccess(onError: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching { repository.refreshDurableStorageAccess() }
+                .onFailure { onError(it.message ?: "永久本地备份初始化失败") }
+        }
+    }
+
+    fun syncDurableBackup(onError: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching { repository.syncDurableBackup() }
+                .onFailure { onError(it.message ?: "永久本地备份同步失败") }
+        }
+    }
 
     fun delete(
         id: String,

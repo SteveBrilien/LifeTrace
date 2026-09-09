@@ -5,15 +5,19 @@ import android.annotation.SuppressLint
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.os.CancellationSignal
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +53,7 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -65,6 +70,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -73,14 +79,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.core.util.Consumer
@@ -90,8 +101,10 @@ import coil.compose.AsyncImage
 import com.lifetrace.app.BuildConfig
 import com.lifetrace.app.data.CloudMirrorStatus
 import com.lifetrace.app.data.DiaryEntry
+import com.lifetrace.app.data.DurableStorageStatus
 import com.lifetrace.app.data.DiaryPhoto
 import com.lifetrace.app.data.SaveDiaryRequest
+import com.lifetrace.app.ui.theme.LifeTraceThemeMode
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -112,9 +125,14 @@ private val destinations = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LifeTraceApp(viewModel: LifeTraceViewModel = viewModel()) {
+fun LifeTraceApp(
+    themeMode: LifeTraceThemeMode,
+    onThemeModeChange: (LifeTraceThemeMode) -> Unit,
+    viewModel: LifeTraceViewModel = viewModel(),
+) {
     val entries by viewModel.entries.collectAsState()
     val cloudStatus by viewModel.cloudStatus.collectAsState()
+    val durableStatus by viewModel.durableStatus.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var route by rememberSaveable { mutableStateOf("home") }
     var selectedEntryId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -126,6 +144,28 @@ fun LifeTraceApp(viewModel: LifeTraceViewModel = viewModel()) {
         scope.launch { snackbar.showSnackbar(message) }
     }
     val context = LocalContext.current
+    val durableAccessLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) {
+        viewModel.refreshDurableStorageAccess(showError)
+    }
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) viewModel.refreshDurableStorageAccess(showError)
+        else showError("未授予存储权限，永久本地备份未启用")
+    }
+    val requestDurableAccess: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val appIntent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${context.packageName}"),
+            )
+            durableAccessLauncher.launch(appIntent)
+        } else {
+            legacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
     val cloudFolderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
@@ -252,7 +292,12 @@ fun LifeTraceApp(viewModel: LifeTraceViewModel = viewModel()) {
                 else -> SettingsScreen(
                     entries = entries,
                     cloudStatus = cloudStatus,
+                    durableStatus = durableStatus,
+                    themeMode = themeMode,
                     contentPadding = padding,
+                    onThemeModeChange = onThemeModeChange,
+                    onEnableDurableStorage = requestDurableAccess,
+                    onSyncDurableStorage = { viewModel.syncDurableBackup(showError) },
                     onChooseCloud = { cloudFolderPicker.launch(null) },
                     onDisconnectCloud = viewModel::disconnectCloudMirror,
                 )
@@ -333,15 +378,35 @@ private fun DiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
         ),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            entry.photos.firstOrNull()?.let { photo ->
-                AsyncImage(
-                    model = File(photo.originalPath),
-                    contentDescription = "日记照片高清缩略图",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(190.dp),
-                    contentScale = ContentScale.Crop,
-                )
+            if (entry.photos.isNotEmpty()) {
+                val pagerState = rememberPagerState(pageCount = { entry.photos.size })
+                Box(Modifier.fillMaxWidth().height(210.dp)) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                    ) { page ->
+                        val photo = entry.photos[page]
+                        AsyncImage(
+                            model = File(photo.originalPath),
+                            contentDescription = "日记照片 ${page + 1}",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    if (entry.photos.size > 1) {
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${entry.photos.size}",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(10.dp)
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(Color.Black.copy(alpha = 0.58f))
+                                .padding(horizontal = 9.dp, vertical = 4.dp),
+                        )
+                    }
+                }
             }
             Column(
                 modifier = Modifier.padding(
@@ -382,7 +447,7 @@ private fun DiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
                 }
                 if (entry.photos.size > 1) {
                     Text(
-                        text = entry.photos.size.toString() + " 张照片",
+                        text = "左右滑动查看 ${entry.photos.size} 张照片",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -608,7 +673,7 @@ private fun DiaryEditorScreen(
                     }
                 }
                 Text(
-                    text = "拒绝位置权限也可以保存；内容优先保存在本机，云盘镜像可在设置中开启。",
+                    text = "拒绝位置权限也可以保存；内容优先保存在本机；建议在设置中启用 Documents/LifeTrace 永久备份。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -714,7 +779,7 @@ private fun DiaryDetailScreen(
             text = {
                 Text(
                     if (cloudMirrorEnabled) {
-                        "本地内容会删除，完整副本会先移入云端 LifeTrace/Trash。"
+                        "本地内容会删除，完整副本会先移入已配置的外部目录 LifeTrace/Trash。"
                     } else {
                         "文字和已复制到应用内的照片都会被永久删除。"
                     },
@@ -816,6 +881,10 @@ private fun DiaryDetailScreen(
 @Composable
 private fun DiaryPhotoPager(photos: List<DiaryPhoto>) {
     val pagerState = rememberPagerState(pageCount = { photos.size })
+    var fullScreenPhoto by remember { mutableStateOf<DiaryPhoto?>(null) }
+    fullScreenPhoto?.let { photo ->
+        FullScreenPhotoViewer(photo = photo, onDismiss = { fullScreenPhoto = null })
+    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         HorizontalPager(
             state = pagerState,
@@ -829,10 +898,17 @@ private fun DiaryPhotoPager(photos: List<DiaryPhoto>) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(380.dp)
-                    .clip(RoundedCornerShape(16.dp)),
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { fullScreenPhoto = photo },
                 contentScale = ContentScale.Fit,
             )
         }
+        Text(
+            text = "点击图片查看大图" + if (photos.size > 1) " · 左右滑动切换" else "",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
         if (photos.size > 1) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -860,6 +936,52 @@ private fun DiaryPhotoPager(photos: List<DiaryPhoto>) {
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullScreenPhotoViewer(photo: DiaryPhoto, onDismiss: () -> Unit) {
+    var scale by remember(photo.id) { mutableFloatStateOf(1f) }
+    var offset by remember(photo.id) { mutableStateOf(Offset.Zero) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            AsyncImage(
+                model = File(photo.originalPath),
+                contentDescription = "日记照片大图",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y,
+                    )
+                    .pointerInput(photo.id) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                            scale = nextScale
+                            offset = if (nextScale > 1f) offset + pan else Offset.Zero
+                        }
+                    },
+                contentScale = ContentScale.Fit,
+            )
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(18.dp),
+            ) {
+                Text("关闭", color = Color.White)
             }
         }
     }
@@ -897,7 +1019,12 @@ private fun MapMilestone(contentPadding: PaddingValues) {
 private fun SettingsScreen(
     entries: List<DiaryEntry>,
     cloudStatus: CloudMirrorStatus,
+    durableStatus: DurableStorageStatus,
+    themeMode: LifeTraceThemeMode,
     contentPadding: PaddingValues,
+    onThemeModeChange: (LifeTraceThemeMode) -> Unit,
+    onEnableDurableStorage: () -> Unit,
+    onSyncDurableStorage: () -> Unit,
     onChooseCloud: () -> Unit,
     onDisconnectCloud: () -> Unit,
 ) {
@@ -919,9 +1046,53 @@ private fun SettingsScreen(
                 lines = listOf(
                     "日记：$entryCount 篇",
                     "照片：$photoCount 张",
-                    "覆盖更新会保留；卸载应用会删除本地私有数据",
+                    if (durableStatus.enabled) "永久备份：Documents/LifeTrace" else "当前仍以应用私有数据为主",
                 ),
             )
+        }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("主题", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(LifeTraceThemeMode.entries, key = { it.storedValue }) { mode ->
+                            FilterChip(
+                                selected = themeMode == mode,
+                                onClick = { onThemeModeChange(mode) },
+                                label = { Text(mode.label) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("永久本地备份", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "把日记 JSON 和原图同步到 Documents/LifeTrace。该目录不属于应用私有目录，卸载后仍保留；重装并授权后会自动检测恢复。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(durableStatus.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Text(durableStatus.rootPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!durableStatus.enabled) {
+                            FilledTonalButton(onClick = onEnableDurableStorage) { Text("启用永久备份") }
+                        } else {
+                            FilledTonalButton(onClick = onSyncDurableStorage, enabled = !durableStatus.syncing) {
+                                Text(if (durableStatus.syncing) "同步中…" else "立即同步")
+                            }
+                        }
+                    }
+                }
+            }
         }
         item {
             Card(
@@ -934,19 +1105,24 @@ private fun SettingsScreen(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
-                    Text("OneDrive / 云盘镜像", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("外部目录镜像", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         if (cloudStatus.enabled) {
-                            "已连接：" + (cloudStatus.folderName ?: "云盘目录")
+                            "已连接：" + (cloudStatus.folderName ?: "外部目录")
                         } else {
-                            "选择 OneDrive 文件夹后，每次保存自动镜像；删除内容进入 LifeTrace/Trash。"
+                            "这是 Android 文件提供器镜像，可选择本地目录，也可在安装 OneDrive 等提供器后选择其云端目录。它不再冒充 OneDrive 链接。"
                         },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "真正的 OneDrive 链接直连需要 Microsoft OAuth/Files.ReadWrite 授权，当前不会把本地路径当成云盘。",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(cloudStatus.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = onChooseCloud, enabled = !cloudStatus.syncing) {
-                            Text(if (cloudStatus.enabled) "更换目录" else "选择云盘目录")
+                            Text(if (cloudStatus.enabled) "更换目录" else "选择外部目录")
                         }
                         if (cloudStatus.enabled) {
                             TextButton(onClick = onDisconnectCloud, enabled = !cloudStatus.syncing) {
@@ -972,7 +1148,7 @@ private fun SettingsScreen(
                 title = "关于",
                 lines = listOf(
                     "LifeTrace " + BuildConfig.VERSION_NAME,
-                    "M2 · 高清图片、活动热力图、地图与云盘镜像",
+                    "高清图片滑动、大图查看、矢量地图、主题与永久本地备份",
                 ),
             )
         }

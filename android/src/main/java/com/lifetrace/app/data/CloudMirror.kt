@@ -18,7 +18,7 @@ data class CloudMirrorStatus(
     val enabled: Boolean,
     val folderName: String?,
     val syncing: Boolean = false,
-    val message: String = if (enabled) "等待同步" else "尚未选择云盘目录",
+    val message: String = if (enabled) "等待同步" else "尚未选择外部目录",
 )
 
 class CloudMirror(private val context: Context) {
@@ -36,7 +36,7 @@ class CloudMirror(private val context: Context) {
         )
         preferences.edit()
             .putString(KEY_TREE_URI, treeUri.toString())
-            .putString(KEY_FOLDER_NAME, folderName ?: "云盘目录")
+            .putString(KEY_FOLDER_NAME, folderName ?: "外部目录")
             .apply()
         _status.value = CloudMirrorStatus(true, folderName, message = "目录已连接，正在同步现有日记")
     }
@@ -67,15 +67,15 @@ class CloudMirror(private val context: Context) {
 
     suspend fun archiveDeleted(entry: DiaryEntry) = withContext(Dispatchers.IO) {
         if (!isEnabled) return@withContext
-        update(true, "正在把删除内容移入云端 Trash…")
+        update(true, "正在把删除内容移入外部目录 Trash…")
         runCatching {
             writeEntry(entry, true)
             entriesRoot().findFile(entry.id)?.delete()
         }.onSuccess {
-            update(false, "已移入云端 Trash")
+            update(false, "已移入外部目录 Trash")
         }.onFailure {
-            update(false, "云端归档失败：" + it.readableMessage())
-            throw IllegalStateException("云端归档失败，本地日记未删除", it)
+            update(false, "外部目录归档失败：" + it.readableMessage())
+            throw IllegalStateException("外部目录归档失败，本地日记未删除", it)
         }
     }
 
@@ -107,19 +107,19 @@ class CloudMirror(private val context: Context) {
                 photo.mimeType.ifBlank { "image/jpeg" },
                 "%02d_%s.%s".format(index + 1, photo.id, source.extension.ifBlank { "jpg" }),
             )
-            requireNotNull(target) { "无法创建云端照片" }
+            requireNotNull(target) { "无法创建外部目录照片" }
             context.contentResolver.openOutputStream(target.uri, "w").use { output ->
-                requireNotNull(output) { "无法写入云端照片" }
+                requireNotNull(output) { "无法写入外部目录照片" }
                 source.inputStream().use { input -> input.copyTo(output) }
             }
         }
     }
 
     private fun root(): DocumentFile {
-        val value = preferences.getString(KEY_TREE_URI, null) ?: error("尚未选择云盘目录")
+        val value = preferences.getString(KEY_TREE_URI, null) ?: error("尚未选择外部目录")
         val selected = DocumentFile.fromTreeUri(context, Uri.parse(value))
-        requireNotNull(selected) { "云盘授权已经失效，请重新选择目录" }
-        require(selected.canWrite()) { "云盘目录当前不可写，请重新授权" }
+        requireNotNull(selected) { "外部目录授权已经失效，请重新选择目录" }
+        require(selected.canWrite()) { "外部目录当前不可写，请重新授权" }
         return selected.findFile(ROOT_FOLDER)?.takeIf { it.isDirectory }
             ?: requireNotNull(selected.createDirectory(ROOT_FOLDER)) { "无法创建 LifeTrace 目录" }
     }

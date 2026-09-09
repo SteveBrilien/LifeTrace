@@ -1,5 +1,27 @@
 # 更新日志
 
+## 0.3.2 — 2026-09-10
+
+### 体验修复
+
+- 时间线日记卡片内直接支持同篇多张照片左右滑动，不再要求先进入详情。
+- 日记详情图片支持点击进入全屏原图查看，并支持双指缩放与拖动。
+- 地图底图从 MapLibre 官方演示数据源切换为 OpenFreeMap Bright 矢量样式；单点默认缩放级别提高，改善道路、建筑和地名细节。
+- 新增“跟随系统 / 经典白 / 薄荷绿 / 深色”四种主题模式；默认恢复为更克制的经典白配色。
+
+### 数据与升级
+
+- 新增 `Documents/LifeTrace` 永久本地备份：日记 JSON 与原图在获得文件访问权限后自动镜像，卸载应用不会删除该目录。
+- 空数据库启动时会扫描 `Documents/LifeTrace`，并兼容扫描 Documents/Download 下一层旧外部镜像中的 `LifeTrace/Entries`；授权后自动导回 Room 与应用私有媒体目录。
+- 删除日记时同时将副本归档到 `Documents/LifeTrace/Trash`。
+- 引入 LifeTrace 项目专用稳定签名密钥，密钥只保存在 `.private/signing/` 且不进入 Git；从本版本签名链开始，后续 APK 可以稳定覆盖安装。
+- 版本号提升至 0.3.2（versionCode 5）。
+
+### 云端语义修正
+
+- 原“OneDrive / 云盘镜像”更名为“外部目录镜像”。它使用 Android Storage Access Framework，本质是系统文件提供器目录，不再把本地目录误称为 OneDrive 链接。
+- 真正的 OneDrive 直连同步明确保留为 Microsoft OAuth + Graph `Files.ReadWrite` 集成任务；未完成授权链之前不伪装为已经支持。
+
 ## 0.3.1 — 2026-09-09
 
 ### 新增

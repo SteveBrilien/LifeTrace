@@ -1,8 +1,16 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.kapt")
+}
+
+val lifeTraceSigningProperties = Properties()
+val lifeTraceSigningFile = rootProject.file(".private/signing/signing.properties")
+if (lifeTraceSigningFile.isFile) {
+    lifeTraceSigningFile.inputStream().use { input -> lifeTraceSigningProperties.load(input) }
 }
 
 android {
@@ -13,15 +21,30 @@ android {
         applicationId = "com.lifetrace.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.1"
+        versionCode = 5
+        versionName = "0.3.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        if (lifeTraceSigningFile.isFile) {
+            create("lifetrace") {
+                storeFile = rootProject.file(lifeTraceSigningProperties.getProperty("storeFile"))
+                storePassword = lifeTraceSigningProperties.getProperty("storePassword")
+                keyAlias = lifeTraceSigningProperties.getProperty("keyAlias")
+                keyPassword = lifeTraceSigningProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfigs.findByName("lifetrace")?.let { signingConfig = it }
+        }
         release {
+            signingConfigs.findByName("lifetrace")?.let { signingConfig = it }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

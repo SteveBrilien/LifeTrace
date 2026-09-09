@@ -26,6 +26,31 @@ class MediaStorage(private val context: Context) {
             uriStrings.map { importOne(entryId, Uri.parse(it)) }
         }
 
+
+    suspend fun importBackupPhotos(
+        entryId: String,
+        photos: List<DurableBackupPhoto>,
+    ): List<DiaryPhotoEntity> = withContext(Dispatchers.IO) {
+        photos.sortedBy { it.sortOrder }.mapIndexed { index, photo ->
+            val extension = photo.sourceFile.extension.ifBlank { "jpg" }
+            val directory = File(context.filesDir, "media/$entryId").apply { mkdirs() }
+            val original = File(directory, photo.id + "." + extension)
+            val thumbnail = File(directory, photo.id + "_thumb.jpg")
+            photo.sourceFile.copyTo(original, overwrite = true)
+            createThumbnail(original, thumbnail)
+            DiaryPhotoEntity(
+                id = photo.id,
+                entryId = entryId,
+                originalPath = original.absolutePath,
+                thumbnailPath = thumbnail.absolutePath,
+                mimeType = photo.mimeType,
+                width = photo.width,
+                height = photo.height,
+                sortOrder = index,
+            )
+        }
+    }
+
     suspend fun deleteFiles(photos: List<DiaryPhoto>) = withContext(Dispatchers.IO) {
         photos.forEach { photo ->
             File(photo.originalPath).delete()
@@ -60,31 +85,7 @@ class MediaStorage(private val context: Context) {
             val width = bounds.outWidth.coerceAtLeast(0)
             val height = bounds.outHeight.coerceAtLeast(0)
 
-            val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = calculateInSampleSize(width, height, 1920)
-            }
-            val bitmap = BitmapFactory.decodeFile(original.absolutePath, decodeOptions)
-            if (bitmap != null) {
-                val maxSide = maxOf(bitmap.width, bitmap.height)
-                val scale = if (maxSide > 1440) 1440f / maxSide else 1f
-                val scaled = if (scale < 1f) {
-                    Bitmap.createScaledBitmap(
-                        bitmap,
-                        (bitmap.width * scale).toInt().coerceAtLeast(1),
-                        (bitmap.height * scale).toInt().coerceAtLeast(1),
-                        true,
-                    )
-                } else {
-                    bitmap
-                }
-                FileOutputStream(thumbnail).use {
-                    scaled.compress(Bitmap.CompressFormat.JPEG, 90, it)
-                }
-                if (scaled !== bitmap) scaled.recycle()
-                bitmap.recycle()
-            } else {
-                original.copyTo(thumbnail, overwrite = true)
-            }
+            createThumbnail(original, thumbnail)
 
             return StoredPhoto(
                 id = id,
@@ -98,6 +99,37 @@ class MediaStorage(private val context: Context) {
             original.delete()
             thumbnail.delete()
             throw error
+        }
+    }
+
+
+    private fun createThumbnail(original: File, thumbnail: File) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(original.absolutePath, bounds)
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, 1920)
+        }
+        val bitmap = BitmapFactory.decodeFile(original.absolutePath, decodeOptions)
+        if (bitmap != null) {
+            val maxSide = maxOf(bitmap.width, bitmap.height)
+            val scale = if (maxSide > 1440) 1440f / maxSide else 1f
+            val scaled = if (scale < 1f) {
+                Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * scale).toInt().coerceAtLeast(1),
+                    (bitmap.height * scale).toInt().coerceAtLeast(1),
+                    true,
+                )
+            } else {
+                bitmap
+            }
+            FileOutputStream(thumbnail).use {
+                scaled.compress(Bitmap.CompressFormat.JPEG, 90, it)
+            }
+            if (scaled !== bitmap) scaled.recycle()
+            bitmap.recycle()
+        } else {
+            original.copyTo(thumbnail, overwrite = true)
         }
     }
 

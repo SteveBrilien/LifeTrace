@@ -134,7 +134,7 @@ fun DiaryMapScreen(
                         map.animateCamera(
                             CameraUpdateFactory.newLatLngZoom(
                                 LatLng(entry.latitude!!, entry.longitude!!),
-                                13.0,
+                                16.0,
                             ),
                         )
                     }
@@ -295,7 +295,7 @@ private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double):
     return 6_371.0 * 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
 }
 
-private const val MAP_STYLE_URL = "https://demotiles.maplibre.org/style.json"
+private const val MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/bright"
 private const val DAY_MILLIS = 86_400_000L
 private const val TRACK_SOURCE_ID = "lifetrace-diary-track-source"
 private const val TRACK_LAYER_ID = "lifetrace-diary-track-layer"
