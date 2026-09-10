@@ -21,11 +21,12 @@ android {
         applicationId = "com.lifetrace.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        versionName = "0.3.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"https://trace.wmy-cloud.cn/update.json\"")
     }
 
     signingConfigs {
@@ -92,7 +93,6 @@ dependencies {
     kapt(libs.androidx.room.compiler)
 
     implementation(libs.coil.compose)
-    implementation(libs.androidx.documentfile)
     implementation(libs.maplibre.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

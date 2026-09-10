@@ -16,6 +16,7 @@ import android.os.CancellationSignal
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.clickable
@@ -57,6 +58,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -95,13 +97,12 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.core.util.Consumer
-import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.lifetrace.app.BuildConfig
-import com.lifetrace.app.data.CloudMirrorStatus
 import com.lifetrace.app.data.DiaryEntry
 import com.lifetrace.app.data.DurableStorageStatus
+import com.lifetrace.app.data.UpdateStatus
 import com.lifetrace.app.data.DiaryPhoto
 import com.lifetrace.app.data.SaveDiaryRequest
 import com.lifetrace.app.ui.theme.LifeTraceThemeMode
@@ -131,8 +132,8 @@ fun LifeTraceApp(
     viewModel: LifeTraceViewModel = viewModel(),
 ) {
     val entries by viewModel.entries.collectAsState()
-    val cloudStatus by viewModel.cloudStatus.collectAsState()
     val durableStatus by viewModel.durableStatus.collectAsState()
+    val updateStatus by viewModel.updateStatus.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var route by rememberSaveable { mutableStateOf("home") }
     var selectedEntryId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -166,15 +167,6 @@ fun LifeTraceApp(
             legacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
     }
-    val cloudFolderPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree(),
-    ) { uri ->
-        if (uri != null) {
-            val folderName = DocumentFile.fromTreeUri(context, uri)?.name
-            viewModel.configureCloudMirror(uri, folderName, showError)
-        }
-    }
-
     BackHandler(enabled = route != "home") {
         route = if (route == "editor" && selectedEntryId != null) "detail" else "home"
     }
@@ -208,7 +200,7 @@ fun LifeTraceApp(
             } else {
                 DiaryDetailScreen(
                     entry = selectedEntry,
-                    cloudMirrorEnabled = cloudStatus.enabled,
+                    durableBackupEnabled = durableStatus.enabled,
                     onBack = { route = "home" },
                     onEdit = { route = "editor" },
                     onDelete = {
@@ -291,15 +283,16 @@ fun LifeTraceApp(
                 )
                 else -> SettingsScreen(
                     entries = entries,
-                    cloudStatus = cloudStatus,
                     durableStatus = durableStatus,
+                    updateStatus = updateStatus,
                     themeMode = themeMode,
                     contentPadding = padding,
                     onThemeModeChange = onThemeModeChange,
                     onEnableDurableStorage = requestDurableAccess,
                     onSyncDurableStorage = { viewModel.syncDurableBackup(showError) },
-                    onChooseCloud = { cloudFolderPicker.launch(null) },
-                    onDisconnectCloud = viewModel::disconnectCloudMirror,
+                    onCheckUpdates = viewModel::checkForUpdates,
+                    onDownloadUpdate = viewModel::downloadAndInstallUpdate,
+                    onInstallDownloaded = viewModel::installDownloadedUpdate,
                 )
             }
         }
@@ -376,6 +369,8 @@ private fun DiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (entry.photos.isNotEmpty()) {
@@ -764,7 +759,7 @@ private fun RemovablePhoto(model: Any, onRemove: () -> Unit) {
 @Composable
 private fun DiaryDetailScreen(
     entry: DiaryEntry,
-    cloudMirrorEnabled: Boolean,
+    durableBackupEnabled: Boolean,
     onBack: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -778,10 +773,10 @@ private fun DiaryDetailScreen(
             title = { Text("删除这篇日记？") },
             text = {
                 Text(
-                    if (cloudMirrorEnabled) {
-                        "本地内容会删除，完整副本会先移入已配置的外部目录 LifeTrace/Trash。"
+                    if (durableBackupEnabled) {
+                        "本地内容会删除；永久备份副本会保留在 Documents/LifeTrace/Trash。"
                     } else {
-                        "文字和已复制到应用内的照片都会被永久删除。"
+                        "当前未启用永久备份，文字和照片会从本机删除。"
                     },
                 )
             },
@@ -1018,46 +1013,37 @@ private fun MapMilestone(contentPadding: PaddingValues) {
 @Composable
 private fun SettingsScreen(
     entries: List<DiaryEntry>,
-    cloudStatus: CloudMirrorStatus,
     durableStatus: DurableStorageStatus,
+    updateStatus: UpdateStatus,
     themeMode: LifeTraceThemeMode,
     contentPadding: PaddingValues,
     onThemeModeChange: (LifeTraceThemeMode) -> Unit,
     onEnableDurableStorage: () -> Unit,
     onSyncDurableStorage: () -> Unit,
-    onChooseCloud: () -> Unit,
-    onDisconnectCloud: () -> Unit,
+    onCheckUpdates: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallDownloaded: () -> Unit,
 ) {
     val entryCount = entries.size
     val photoCount = entries.sumOf { it.photos.size }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            start = 18.dp,
-            top = contentPadding.calculateTopPadding() + 12.dp,
-            end = 18.dp,
-            bottom = contentPadding.calculateBottomPadding() + 24.dp,
+            start = 16.dp,
+            top = contentPadding.calculateTopPadding() + 8.dp,
+            end = 16.dp,
+            bottom = contentPadding.calculateBottomPadding() + 20.dp,
         ),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            SettingsCard(
-                title = "本地数据",
-                lines = listOf(
-                    "日记：$entryCount 篇",
-                    "照片：$photoCount 张",
-                    if (durableStatus.enabled) "永久备份：Documents/LifeTrace" else "当前仍以应用私有数据为主",
-                ),
-            )
-        }
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            ) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("主题", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SettingsSection("外观") {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("主题", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         items(LifeTraceThemeMode.entries, key = { it.storedValue }) { mode ->
                             FilterChip(
                                 selected = themeMode == mode,
@@ -1069,115 +1055,180 @@ private fun SettingsScreen(
                 }
             }
         }
+
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            ) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("永久本地备份", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "把日记 JSON 和原图同步到 Documents/LifeTrace。该目录不属于应用私有目录，卸载后仍保留；重装并授权后会自动检测恢复。",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(durableStatus.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    Text(durableStatus.rootPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (!durableStatus.enabled) {
-                            FilledTonalButton(onClick = onEnableDurableStorage) { Text("启用永久备份") }
+            SettingsSection("数据") {
+                SettingRow(
+                    title = "本地记录",
+                    summary = "$entryCount 篇日记 · $photoCount 张照片",
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SettingRow(
+                    title = "永久备份",
+                    summary = if (durableStatus.enabled) {
+                        "Documents/LifeTrace · 卸载后保留"
+                    } else {
+                        "尚未启用 · 建议启用以防卸载丢失"
+                    },
+                    trailing = {
+                        if (durableStatus.enabled) {
+                            FilledTonalButton(
+                                onClick = onSyncDurableStorage,
+                                enabled = !durableStatus.syncing,
+                            ) { Text(if (durableStatus.syncing) "同步中" else "同步") }
                         } else {
-                            FilledTonalButton(onClick = onSyncDurableStorage, enabled = !durableStatus.syncing) {
-                                Text(if (durableStatus.syncing) "同步中…" else "立即同步")
-                            }
+                            FilledTonalButton(onClick = onEnableDurableStorage) { Text("启用") }
                         }
-                    }
-                }
+                    },
+                )
+                Text(
+                    text = durableStatus.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                )
             }
         }
+
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                ),
-            ) {
+            SettingsSection("更新") {
+                SettingRow(
+                    title = "LifeTrace ${BuildConfig.VERSION_NAME}",
+                    summary = "更新服务 · trace.wmy-cloud.cn",
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Column(
-                    modifier = Modifier.padding(18.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
-                    Text("外部目录镜像", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        if (cloudStatus.enabled) {
-                            "已连接：" + (cloudStatus.folderName ?: "外部目录")
+                        text = updateStatus.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (updateStatus.available != null) {
+                            MaterialTheme.colorScheme.primary
                         } else {
-                            "这是 Android 文件提供器镜像，可选择本地目录，也可在安装 OneDrive 等提供器后选择其云端目录。它不再冒充 OneDrive 链接。"
+                            MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(
-                        "真正的 OneDrive 链接直连需要 Microsoft OAuth/Files.ReadWrite 授权，当前不会把本地路径当成云盘。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(cloudStatus.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = onChooseCloud, enabled = !cloudStatus.syncing) {
-                            Text(if (cloudStatus.enabled) "更换目录" else "选择外部目录")
+                    if (updateStatus.downloading) {
+                        val progress = (updateStatus.progress ?: 0).coerceIn(0, 100) / 100f
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    updateStatus.available?.notes?.takeIf { it.isNotBlank() }?.let { notes ->
+                        Text(
+                            text = notes,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        when {
+                            updateStatus.downloadedPath != null -> {
+                                FilledTonalButton(onClick = onInstallDownloaded) { Text("安装已下载版本") }
+                            }
+                            updateStatus.available != null -> {
+                                FilledTonalButton(
+                                    onClick = onDownloadUpdate,
+                                    enabled = !updateStatus.downloading,
+                                ) { Text(if (updateStatus.downloading) "下载中…" else "下载并安装") }
+                            }
+                            else -> {
+                                FilledTonalButton(
+                                    onClick = onCheckUpdates,
+                                    enabled = !updateStatus.checking,
+                                ) { Text(if (updateStatus.checking) "检查中…" else "检查更新") }
+                            }
                         }
-                        if (cloudStatus.enabled) {
-                            TextButton(onClick = onDisconnectCloud, enabled = !cloudStatus.syncing) {
-                                Text("断开")
+                        if (updateStatus.available != null || updateStatus.downloadedPath != null) {
+                            TextButton(onClick = onCheckUpdates, enabled = !updateStatus.downloading) {
+                                Text("重新检查")
                             }
                         }
                     }
                 }
             }
         }
+
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                ),
-            ) {
-                ActivityHeatmap(entries = entries, modifier = Modifier.padding(18.dp))
+            SettingsSection("记录活跃度") {
+                ActivityHeatmap(entries = entries, modifier = Modifier.padding(14.dp))
             }
         }
+
         item {
-            SettingsCard(
-                title = "关于",
-                lines = listOf(
-                    "LifeTrace " + BuildConfig.VERSION_NAME,
-                    "高清图片滑动、大图查看、矢量地图、主题与永久本地备份",
-                ),
-            )
+            SettingsSection("关于") {
+                SettingRow(
+                    title = "LifeTrace ${BuildConfig.VERSION_NAME}",
+                    summary = "本地优先 · 矢量地图 · 稳定签名 · 应用内更新",
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun SettingsCard(title: String, lines: List<String>) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
+private fun SettingsSection(
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column { content() }
+        }
+    }
+}
+
+@Composable
+private fun SettingRow(
+    title: String,
+    summary: String,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
             )
-            lines.forEach {
-                Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(10.dp))
+            trailing()
         }
     }
 }

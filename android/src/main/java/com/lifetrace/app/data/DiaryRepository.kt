@@ -1,6 +1,5 @@
 package com.lifetrace.app.data
 
-import android.net.Uri
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -41,13 +40,11 @@ data class SaveDiaryRequest(
 class DiaryRepository(
     private val dao: DiaryDao,
     private val mediaStorage: MediaStorage,
-    private val cloudMirror: CloudMirror,
     private val durableBackup: DurableBackupStore,
 ) {
     val entries: Flow<List<DiaryEntry>> = dao.observeAll().map { rows ->
         rows.map { it.toModel() }
     }
-    val cloudStatus = cloudMirror.status
     val durableStatus = durableBackup.status
 
     suspend fun save(request: SaveDiaryRequest): String {
@@ -124,7 +121,6 @@ class DiaryRepository(
         mediaStorage.deleteFiles(removed)
         dao.getById(entryId)?.toModel()?.let { saved ->
             durableBackup.backupEntry(saved)
-            cloudMirror.backupEntry(saved)
         }
         return entryId
     }
@@ -132,18 +128,10 @@ class DiaryRepository(
     suspend fun delete(id: String) {
         dao.getById(id)?.toModel()?.let { entry ->
             durableBackup.archiveDeleted(entry)
-            cloudMirror.archiveDeleted(entry)
         }
         dao.deleteEntry(id)
         mediaStorage.deleteEntryDirectory(id)
     }
-
-    suspend fun configureCloudMirror(treeUri: Uri, folderName: String?) {
-        cloudMirror.configure(treeUri, folderName)
-        cloudMirror.mirrorAll(dao.getAll().map { it.toModel() })
-    }
-
-    fun disconnectCloudMirror() = cloudMirror.disconnect()
 
     suspend fun refreshDurableStorageAccess(): Int {
         if (!durableBackup.refreshAccess()) return 0
