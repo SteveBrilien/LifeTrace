@@ -98,3 +98,13 @@ Files:
 - `android/src/main/java/com/lifetrace/app/MainActivity.kt`
 - `android/src/main/java/com/lifetrace/app/ui/LifeTraceApp.kt`
 - `android/src/main/java/com/lifetrace/app/ui/DiaryMapScreen.kt`
+
+## 2026-09-10T16:31:40.363128Z — UPDATE: LifeTrace 0.3.5 diary metadata, soft-dark map and navigation touch polish
+
+Timeline diary cards now place location directly after the date with a compact separator; map diary cards use the same metadata layout. Dark map mode no longer switches to OpenFreeMap's nearly-black dark template: it keeps the richer Bright vector style and remaps background, land use, water, buildings, roads, boundaries and text to a softer dark palette at runtime, leaving LifeTrace markers, tracks and Compose overlays untouched. Bottom navigation keeps the full tap target while disabling the large Material press indication; the selected capsule remains as the persistent state cue. Version bumped to 0.3.5 / versionCode 8. Dirty-workspace Debug build and lint both completed successfully; APK signing certificate remained unchanged.
+
+Files:
+- `android/build.gradle.kts`
+- `android/src/main/java/com/lifetrace/app/ui/LifeTraceApp.kt`
+- `android/src/main/java/com/lifetrace/app/ui/DiaryMapScreen.kt`
+- `android/src/main/java/com/lifetrace/app/ui/MapStylePalette.kt`

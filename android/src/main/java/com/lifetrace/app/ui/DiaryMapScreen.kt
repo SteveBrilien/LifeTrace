@@ -96,7 +96,6 @@ fun DiaryMapScreen(
         LifeTraceThemeMode.SYSTEM -> systemDark
         else -> false
     }
-    val mapStyleUrl = if (darkMap) MAP_STYLE_DARK_URL else MAP_STYLE_LIGHT_URL
     var rangeDays by rememberSaveable { mutableIntStateOf(0) }
     val now = System.currentTimeMillis()
     val locatedEntries = remember(entries, rangeDays) {
@@ -128,9 +127,10 @@ fun DiaryMapScreen(
         }
     }
 
-    LaunchedEffect(locatedEntries.map { it.id to it.updatedAt }, mapStyleUrl, labelLanguage) {
+    LaunchedEffect(locatedEntries.map { it.id to it.updatedAt }, darkMap, labelLanguage) {
         mapView.getMapAsync { map ->
-            map.setStyle(Style.Builder().fromUri(mapStyleUrl)) { style ->
+            map.setStyle(Style.Builder().fromUri(MAP_STYLE_LIGHT_URL)) { style ->
+                if (darkMap) applySoftDarkPalette(style)
                 applyMapLabelLanguage(style, labelLanguage)
                 map.clear()
                 locatedEntries.forEach { entry ->
@@ -265,16 +265,27 @@ private fun MapDiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
                 )
             }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    entry.placeLabel.ifBlank { "已记录位置" },
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                )
-                Text(
-                    formatMapDate(entry.occurredAt),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        formatMapDate(entry.occurredAt),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        "·",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        entry.placeLabel.ifBlank { "已记录位置" },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
                 Text(
                     entry.body.ifBlank { "图片日记" },
                     style = MaterialTheme.typography.bodySmall,
@@ -376,7 +387,6 @@ private val NAMED_SOURCE_LAYERS = setOf(
 )
 
 private const val MAP_STYLE_LIGHT_URL = "https://tiles.openfreemap.org/styles/bright"
-private const val MAP_STYLE_DARK_URL = "https://tiles.openfreemap.org/styles/dark"
 private const val DAY_MILLIS = 86_400_000L
 private const val TRACK_SOURCE_ID = "lifetrace-diary-track-source"
 private const val TRACK_LAYER_ID = "lifetrace-diary-track-layer"

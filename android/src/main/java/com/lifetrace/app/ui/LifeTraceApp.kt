@@ -20,6 +20,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -315,11 +316,16 @@ private fun CompactBottomNavigation(
         ) {
             items.forEach { (label, icon, index) ->
                 val selected = selectedTab == index
+                val interactionSource = remember(index) { MutableInteractionSource() }
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .clickable { onSelected(index) },
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = { onSelected(index) },
+                        ),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -473,11 +479,33 @@ private fun DiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
                 ),
                 verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                Text(
-                    text = formatDateTime(entry.occurredAt),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = formatDateTime(entry.occurredAt),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    if (entry.placeLabel.isNotBlank() || entry.latitude != null) {
+                        Text(
+                            text = "·",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = entry.placeLabel.ifBlank {
+                                formatCoordinates(entry.latitude, entry.longitude)
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
                 if (entry.body.isNotBlank()) {
                     Text(
                         text = entry.body,
@@ -490,15 +518,6 @@ private fun DiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
                         text = "图片日记",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (entry.placeLabel.isNotBlank() || entry.latitude != null) {
-                    Text(
-                        text = entry.placeLabel.ifBlank { formatCoordinates(entry.latitude, entry.longitude) },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
