@@ -79,3 +79,12 @@
 - 完成 Room 离线日记闭环。
 - 支持图文、时间、单次位置、新增、编辑、详情和删除。
 - 禁用 Android 系统云备份。
+
+## 2026-09-10T07:34:01.615242Z — UPDATE: Add reusable Azure/Caddy update-site cutover and release publisher
+
+Prepared fail-closed trace.wmy-cloud.cn deployment assets using the previously proven Docker Caddy pattern: private Docker-bridge backend on port 18779, exact Caddy Compose discovery, validation in the running image, timestamp backup, force-recreate of only the Caddy service to avoid stale single-file bind-mount inodes, automatic rollback, ACME/public health verification, atomic update.json publication, and public APK SHA-256 round-trip verification. Azure host mutation is still pending because this MCP session has no authorized Azure host channel/Remote Desktop device.
+
+Files:
+- `infra/azure/AZURE-LIFETRACE-UPDATE-CUTOVER.sh`
+- `infra/azure/AZURE-LIFETRACE-PUBLISH.sh`
+- `docs/AZURE_UPDATE_SITE.md`
