@@ -1,6 +1,7 @@
 package com.lifetrace.app.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,7 +42,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.lifetrace.app.data.DiaryEntry
+import com.lifetrace.app.ui.theme.LifeTraceThemeMode
 import java.io.File
+import java.util.Locale
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -49,25 +52,51 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory.lineCap
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineJoin
 import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.layers.PropertyFactory.textField
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+
+
+enum class MapLabelLanguage(val storedValue: String, val label: String) {
+    SYSTEM("system", "系统"),
+    CHINESE("zh", "中文"),
+    ENGLISH("en", "English"),
+    LOCAL("local", "本地"),
+    ;
+
+    companion object {
+        fun fromStored(value: String?): MapLabelLanguage =
+            entries.firstOrNull { it.storedValue == value } ?: SYSTEM
+    }
+}
 
 @Composable
 fun DiaryMapScreen(
     entries: List<DiaryEntry>,
     contentPadding: PaddingValues,
+    labelLanguage: MapLabelLanguage,
+    themeMode: LifeTraceThemeMode,
     onOpen: (DiaryEntry) -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val systemDark = isSystemInDarkTheme()
+    val darkMap = when (themeMode) {
+        LifeTraceThemeMode.DARK -> true
+        LifeTraceThemeMode.SYSTEM -> systemDark
+        else -> false
+    }
+    val mapStyleUrl = if (darkMap) MAP_STYLE_DARK_URL else MAP_STYLE_LIGHT_URL
     var rangeDays by rememberSaveable { mutableIntStateOf(0) }
     val now = System.currentTimeMillis()
     val locatedEntries = remember(entries, rangeDays) {
@@ -99,9 +128,10 @@ fun DiaryMapScreen(
         }
     }
 
-    LaunchedEffect(locatedEntries.map { it.id to it.updatedAt }) {
+    LaunchedEffect(locatedEntries.map { it.id to it.updatedAt }, mapStyleUrl, labelLanguage) {
         mapView.getMapAsync { map ->
-            map.setStyle(Style.Builder().fromUri(MAP_STYLE_URL)) { style ->
+            map.setStyle(Style.Builder().fromUri(mapStyleUrl)) { style ->
+                applyMapLabelLanguage(style, labelLanguage)
                 map.clear()
                 locatedEntries.forEach { entry ->
                     map.addMarker(
@@ -298,7 +328,55 @@ private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double):
     return 6_371.0 * 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
 }
 
-private const val MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/bright"
+private fun applyMapLabelLanguage(style: Style, language: MapLabelLanguage) {
+    val expression = mapLabelExpression(language)
+    style.layers
+        .filterIsInstance<SymbolLayer>()
+        .filter { layer ->
+            runCatching { layer.sourceLayer in NAMED_SOURCE_LAYERS }.getOrDefault(false) &&
+                !layer.id.contains("shield", ignoreCase = true) &&
+                !layer.id.contains("motorway", ignoreCase = true)
+        }
+        .forEach { layer -> layer.setProperties(textField(expression)) }
+}
+
+private fun mapLabelExpression(language: MapLabelLanguage): Expression {
+    if (language == MapLabelLanguage.LOCAL) {
+        return Expression.coalesce(
+            Expression.get("name"),
+            Expression.get("name:nonlatin"),
+            Expression.get("name_en"),
+        )
+    }
+    val languageCode = when (language) {
+        MapLabelLanguage.CHINESE -> "zh"
+        MapLabelLanguage.ENGLISH -> "en"
+        MapLabelLanguage.SYSTEM -> Locale.getDefault().language.ifBlank { "en" }
+        MapLabelLanguage.LOCAL -> error("handled above")
+    }
+    val expressions = mutableListOf(
+        Expression.get("name:$languageCode"),
+    )
+    if (languageCode == "en") expressions += Expression.get("name_en")
+    expressions += Expression.get("name")
+    expressions += Expression.get("name:nonlatin")
+    expressions += Expression.get("name_en")
+    return Expression.coalesce(*expressions.toTypedArray())
+}
+
+private val NAMED_SOURCE_LAYERS = setOf(
+    "aerodrome_label",
+    "mountain_peak",
+    "park",
+    "place",
+    "poi",
+    "transportation_name",
+    "water_name",
+    "waterway",
+)
+
+private const val MAP_STYLE_LIGHT_URL = "https://tiles.openfreemap.org/styles/bright"
+private const val MAP_STYLE_DARK_URL = "https://tiles.openfreemap.org/styles/dark"
 private const val DAY_MILLIS = 86_400_000L
 private const val TRACK_SOURCE_ID = "lifetrace-diary-track-source"
 private const val TRACK_LAYER_ID = "lifetrace-diary-track-layer"

@@ -88,3 +88,13 @@ Files:
 - `infra/azure/AZURE-LIFETRACE-UPDATE-CUTOVER.sh`
 - `infra/azure/AZURE-LIFETRACE-PUBLISH.sh`
 - `docs/AZURE_UPDATE_SITE.md`
+
+## 2026-09-10T08:15:44.355824Z — UPDATE: LifeTrace 0.3.4 immersive navigation, vertical diary photos and adaptive map
+
+Reduced the in-app bottom navigation to a compact 60dp bar and enabled transient-swipe immersive navigation that hides only the Android system navigation bar while preserving the status bar. Diary detail now places delete beside Edit in the top app bar, adds an auto-mirrored back arrow, restores vertically scrolling full-width photos, keeps tap-to-open full-screen zoom, and removes all swipe instruction copy while preserving horizontal swiping on timeline cards. Map now supports System/中文/English/本地 label choices using available name:<lang> tile attributes with fallbacks, and switches between OpenFreeMap bright/dark styles according to the LifeTrace theme; System theme follows Android day/night automatically. Version bumped to 0.3.4 / versionCode 7. Dirty-workspace debug and lint both passed before commit.
+
+Files:
+- `android/build.gradle.kts`
+- `android/src/main/java/com/lifetrace/app/MainActivity.kt`
+- `android/src/main/java/com/lifetrace/app/ui/LifeTraceApp.kt`
+- `android/src/main/java/com/lifetrace/app/ui/DiaryMapScreen.kt`

@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,6 +44,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Settings
@@ -57,16 +60,16 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -128,7 +131,9 @@ private val destinations = listOf(
 @Composable
 fun LifeTraceApp(
     themeMode: LifeTraceThemeMode,
+    mapLabelLanguage: MapLabelLanguage,
     onThemeModeChange: (LifeTraceThemeMode) -> Unit,
+    onMapLabelLanguageChange: (MapLabelLanguage) -> Unit,
     viewModel: LifeTraceViewModel = viewModel(),
 ) {
     val entries by viewModel.entries.collectAsState()
@@ -225,26 +230,10 @@ fun LifeTraceApp(
                 )
             },
             bottomBar = {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        icon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                        label = { Text("日记") },
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        icon = { Icon(Icons.Rounded.LocationOn, contentDescription = null) },
-                        label = { Text("地图") },
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == 2,
-                        onClick = { selectedTab = 2 },
-                        icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
-                        label = { Text("设置") },
-                    )
-                }
+                CompactBottomNavigation(
+                    selectedTab = selectedTab,
+                    onSelected = { selectedTab = it },
+                )
             },
             floatingActionButton = {
                 if (selectedTab == 0) {
@@ -276,6 +265,8 @@ fun LifeTraceApp(
                 1 -> DiaryMapScreen(
                     entries = entries,
                     contentPadding = padding,
+                    labelLanguage = mapLabelLanguage,
+                    themeMode = themeMode,
                     onOpen = {
                         selectedEntryId = it.id
                         route = "detail"
@@ -286,14 +277,84 @@ fun LifeTraceApp(
                     durableStatus = durableStatus,
                     updateStatus = updateStatus,
                     themeMode = themeMode,
+                    mapLabelLanguage = mapLabelLanguage,
                     contentPadding = padding,
                     onThemeModeChange = onThemeModeChange,
+                    onMapLabelLanguageChange = onMapLabelLanguageChange,
                     onEnableDurableStorage = requestDurableAccess,
                     onSyncDurableStorage = { viewModel.syncDurableBackup(showError) },
                     onCheckUpdates = viewModel::checkForUpdates,
                     onDownloadUpdate = viewModel::downloadAndInstallUpdate,
                     onInstallDownloaded = viewModel::installDownloadedUpdate,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactBottomNavigation(
+    selectedTab: Int,
+    onSelected: (Int) -> Unit,
+) {
+    val items = listOf(
+        Triple("日记", Icons.Rounded.Edit, 0),
+        Triple("地图", Icons.Rounded.LocationOn, 1),
+        Triple("设置", Icons.Rounded.Settings, 2),
+    )
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 3.dp,
+        shadowElevation = 1.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items.forEach { (label, icon, index) ->
+                val selected = selectedTab == index
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { onSelected(index) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(52.dp)
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.secondaryContainer
+                                else Color.Transparent,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            icon,
+                            contentDescription = label,
+                            modifier = Modifier.size(22.dp),
+                            tint = if (selected) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         }
     }
@@ -438,13 +499,6 @@ private fun DiaryCard(entry: DiaryEntry, onClick: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (entry.photos.size > 1) {
-                    Text(
-                        text = "左右滑动查看 ${entry.photos.size} 张照片",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -766,6 +820,11 @@ private fun DiaryDetailScreen(
     snackbar: SnackbarHostState,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
+    var fullScreenPhoto by remember { mutableStateOf<DiaryPhoto?>(null) }
+
+    fullScreenPhoto?.let { photo ->
+        FullScreenPhotoViewer(photo = photo, onDismiss = { fullScreenPhoto = null })
+    }
 
     if (confirmDelete) {
         AlertDialog(
@@ -794,10 +853,25 @@ private fun DiaryDetailScreen(
             CenterAlignedTopAppBar(
                 title = { Text("日记详情") },
                 navigationIcon = {
-                    TextButton(onClick = onBack) { Text("返回") }
+                    TextButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = null,
+                            modifier = Modifier.size(19.dp),
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text("返回")
+                    }
                 },
                 actions = {
                     TextButton(onClick = onEdit) { Text("编辑") }
+                    IconButton(onClick = { confirmDelete = true }) {
+                        Icon(
+                            Icons.Rounded.Delete,
+                            contentDescription = "删除日记",
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 },
             )
         },
@@ -856,17 +930,8 @@ private fun DiaryDetailScreen(
                 }
             }
             if (entry.photos.isNotEmpty()) {
-                item {
-                    DiaryPhotoPager(entry.photos)
-                }
-            }
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                OutlinedButton(
-                    onClick = { confirmDelete = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("删除日记")
+                items(entry.photos, key = { it.id }) { photo ->
+                    DiaryDetailPhoto(photo = photo, onClick = { fullScreenPhoto = photo })
                 }
             }
         }
@@ -874,66 +939,16 @@ private fun DiaryDetailScreen(
 }
 
 @Composable
-private fun DiaryPhotoPager(photos: List<DiaryPhoto>) {
-    val pagerState = rememberPagerState(pageCount = { photos.size })
-    var fullScreenPhoto by remember { mutableStateOf<DiaryPhoto?>(null) }
-    fullScreenPhoto?.let { photo ->
-        FullScreenPhotoViewer(photo = photo, onDismiss = { fullScreenPhoto = null })
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        HorizontalPager(
-            state = pagerState,
-            pageSpacing = 12.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) { page ->
-            val photo = photos[page]
-            AsyncImage(
-                model = File(photo.originalPath),
-                contentDescription = "日记照片 " + (page + 1),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(380.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { fullScreenPhoto = photo },
-                contentScale = ContentScale.Fit,
-            )
-        }
-        Text(
-            text = "点击图片查看大图" + if (photos.size > 1) " · 左右滑动切换" else "",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        if (photos.size > 1) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                photos.indices.forEach { index ->
-                    Box(
-                        modifier = Modifier
-                            .padding(horizontal = 3.dp)
-                            .size(if (index == pagerState.currentPage) 8.dp else 6.dp)
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(
-                                if (index == pagerState.currentPage) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainerHighest
-                                },
-                            ),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = (pagerState.currentPage + 1).toString() + " / " + photos.size,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
+private fun DiaryDetailPhoto(photo: DiaryPhoto, onClick: () -> Unit) {
+    AsyncImage(
+        model = File(photo.originalPath),
+        contentDescription = "日记照片",
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
+        contentScale = ContentScale.FillWidth,
+    )
 }
 
 @Composable
@@ -1016,8 +1031,10 @@ private fun SettingsScreen(
     durableStatus: DurableStorageStatus,
     updateStatus: UpdateStatus,
     themeMode: LifeTraceThemeMode,
+    mapLabelLanguage: MapLabelLanguage,
     contentPadding: PaddingValues,
     onThemeModeChange: (LifeTraceThemeMode) -> Unit,
+    onMapLabelLanguageChange: (MapLabelLanguage) -> Unit,
     onEnableDurableStorage: () -> Unit,
     onSyncDurableStorage: () -> Unit,
     onCheckUpdates: () -> Unit,
@@ -1052,6 +1069,29 @@ private fun SettingsScreen(
                             )
                         }
                     }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        "地图语言",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        items(MapLabelLanguage.entries, key = { it.storedValue }) { language ->
+                            FilterChip(
+                                selected = mapLabelLanguage == language,
+                                onClick = { onMapLabelLanguageChange(language) },
+                                label = { Text(language.label) },
+                            )
+                        }
+                    }
+                    Text(
+                        text = "地图明暗跟随应用主题；选择“系统”主题时会随系统日间/夜间自动切换。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
