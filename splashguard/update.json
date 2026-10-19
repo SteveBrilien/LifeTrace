@@ -1,0 +1,7 @@
+{
+  "versionCode": 38,
+  "versionName": "0.4.19",
+  "apkUrl": "https://mcp.wmy-cloud.cn/artifacts/pub-9ba2a17879e6414d9cf457c508e8824a/SplashGuard-0.4.19.apk?exp=0&sig=463c9c0c3647e3d20e9f214f3ed707d2b9778511854f3622c688397ebc806135",
+  "sha256": "025840088603ecd619da08b4504774f42fdae5a4a385cd8cf59e3bf67094ec89",
+  "notes": "新增系统消息栏通知总开关；设置页新增更新检查和更新下载入口。"
+}
