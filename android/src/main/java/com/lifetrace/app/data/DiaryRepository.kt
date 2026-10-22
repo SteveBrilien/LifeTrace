@@ -22,6 +22,7 @@ data class DiaryEntry(
     val updatedAt: Long,
     val latitude: Double?,
     val longitude: Double?,
+    val altitudeMeters: Double?,
     val placeLabel: String,
     val photos: List<DiaryPhoto>,
 )
@@ -32,6 +33,7 @@ data class SaveDiaryRequest(
     val occurredAt: Long,
     val latitude: Double?,
     val longitude: Double?,
+    val altitudeMeters: Double?,
     val placeLabel: String,
     val retainedPhotoIds: List<String>,
     val newPhotoUris: List<String>,
@@ -90,6 +92,7 @@ class DiaryRepository(
             updatedAt = now,
             latitude = request.latitude,
             longitude = request.longitude,
+            altitudeMeters = request.altitudeMeters,
             placeLabel = request.placeLabel.trim(),
         )
 
@@ -136,10 +139,7 @@ class DiaryRepository(
     suspend fun refreshDurableStorageAccess(): Int {
         if (!durableBackup.refreshAccess()) return 0
         val current = dao.getAll()
-        if (current.isNotEmpty()) {
-            durableBackup.mirrorAll(current.map { it.toModel() })
-            return 0
-        }
+        if (current.isNotEmpty()) return 0
         val backups = durableBackup.readEntries()
         backups.forEach { backup ->
             val photos = mediaStorage.importBackupPhotos(backup.id, backup.photos)
@@ -152,6 +152,7 @@ class DiaryRepository(
                     updatedAt = backup.updatedAt,
                     latitude = backup.latitude,
                     longitude = backup.longitude,
+                    altitudeMeters = backup.altitudeMeters,
                     placeLabel = backup.placeLabel,
                 ),
                 photos,
@@ -159,6 +160,18 @@ class DiaryRepository(
         }
         durableBackup.reportRestore(backups.size)
         return backups.size
+    }
+
+    suspend fun ensureMediaIsolation(): Int {
+        var migratedCount = 0
+        dao.getAll().forEach { row ->
+            val result = mediaStorage.ensurePrivateCopies(row.entry.id, row.photos)
+            if (result.migratedCount > 0) {
+                dao.replaceEntry(row.entry, result.photos)
+                migratedCount += result.migratedCount
+            }
+        }
+        return migratedCount
     }
 
     suspend fun syncDurableBackup() {
@@ -174,6 +187,7 @@ class DiaryRepository(
         updatedAt = entry.updatedAt,
         latitude = entry.latitude,
         longitude = entry.longitude,
+        altitudeMeters = entry.altitudeMeters,
         placeLabel = entry.placeLabel,
         photos = photos.sortedBy { it.sortOrder }.map { it.toModel() },
     )

@@ -15,6 +15,8 @@ import androidx.room.Relation
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "diary_entries")
@@ -26,6 +28,7 @@ data class DiaryEntryEntity(
     val updatedAt: Long,
     val latitude: Double?,
     val longitude: Double?,
+    val altitudeMeters: Double?,
     val placeLabel: String,
 )
 
@@ -94,7 +97,7 @@ interface DiaryDao {
 
 @Database(
     entities = [DiaryEntryEntity::class, DiaryPhotoEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class LifeTraceDatabase : RoomDatabase() {
@@ -110,7 +113,18 @@ abstract class LifeTraceDatabase : RoomDatabase() {
                     context.applicationContext,
                     LifeTraceDatabase::class.java,
                     "lifetrace.db",
-                ).build().also { instance = it }
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { instance = it }
             }
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE diary_entries ADD COLUMN altitudeMeters REAL",
+                )
+            }
+        }
     }
 }

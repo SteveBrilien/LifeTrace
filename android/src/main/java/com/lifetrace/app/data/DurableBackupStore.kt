@@ -41,6 +41,7 @@ data class DurableBackupEntry(
     val updatedAt: Long,
     val latitude: Double?,
     val longitude: Double?,
+    val altitudeMeters: Double?,
     val placeLabel: String,
     val photos: List<DurableBackupPhoto>,
 )
@@ -55,6 +56,7 @@ class DurableBackupStore(private val context: Context) {
 
     fun refreshAccess(): Boolean {
         val enabled = hasDirectFileAccess()
+        if (enabled) ensureRootMetadata()
         _status.value = currentStatus()
         return enabled
     }
@@ -172,7 +174,8 @@ class DurableBackupStore(private val context: Context) {
     private fun trashRoot(): File = File(rootDirectory, TRASH_FOLDER).apply { mkdirs() }
 
     private fun writeEntry(entry: DiaryEntry, destination: File) {
-        rootDirectory.mkdirs()
+        ensureRootMetadata()
+        if (backupIsCurrent(entry, destination)) return
         val temp = File(destination.parentFile, ".${destination.name}.tmp")
         temp.deleteRecursively()
         temp.mkdirs()
@@ -196,7 +199,7 @@ class DurableBackupStore(private val context: Context) {
         }
 
         File(temp, ENTRY_FILE).writeText(JSONObject().apply {
-            put("schemaVersion", 2)
+            put("schemaVersion", 3)
             put("id", entry.id)
             put("body", entry.body)
             put("occurredAt", entry.occurredAt)
@@ -204,6 +207,7 @@ class DurableBackupStore(private val context: Context) {
             put("updatedAt", entry.updatedAt)
             put("latitude", entry.latitude ?: JSONObject.NULL)
             put("longitude", entry.longitude ?: JSONObject.NULL)
+            put("altitudeMeters", entry.altitudeMeters ?: JSONObject.NULL)
             put("placeLabel", entry.placeLabel)
             put("photos", photosJson)
         }.toString(2))
@@ -245,9 +249,32 @@ class DurableBackupStore(private val context: Context) {
             updatedAt = json.optLong("updatedAt", json.getLong("occurredAt")),
             latitude = json.optNullableDouble("latitude"),
             longitude = json.optNullableDouble("longitude"),
+            altitudeMeters = json.optNullableDouble("altitudeMeters"),
             placeLabel = json.optString("placeLabel"),
             photos = photos.sortedBy { it.sortOrder },
         )
+    }
+
+    private fun ensureRootMetadata() {
+        rootDirectory.mkdirs()
+        runCatching { File(rootDirectory, ".nomedia").apply { if (!exists()) createNewFile() } }
+    }
+
+    private fun backupIsCurrent(entry: DiaryEntry, destination: File): Boolean {
+        val entryFile = File(destination, ENTRY_FILE)
+        if (!entryFile.isFile) return false
+        return runCatching {
+            val json = JSONObject(entryFile.readText())
+            if (json.optLong("updatedAt", Long.MIN_VALUE) != entry.updatedAt) return@runCatching false
+            val photoArray = json.optJSONArray("photos") ?: return@runCatching false
+            if (photoArray.length() != entry.photos.size) return@runCatching false
+            val photosDirectory = File(destination, PHOTOS_FOLDER)
+            for (index in 0 until photoArray.length()) {
+                val fileName = photoArray.getJSONObject(index).optString("fileName")
+                if (fileName.isBlank() || !File(photosDirectory, fileName).isFile) return@runCatching false
+            }
+            true
+        }.getOrDefault(false)
     }
 
     private fun JSONObject.optNullableDouble(key: String): Double? =

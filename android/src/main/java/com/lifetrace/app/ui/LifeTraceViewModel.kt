@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
 class LifeTraceViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as LifeTraceApplication).repository
     private val updater = AppUpdater(application)
+    private val updatePreferences = application.getSharedPreferences("lifetrace_updates", 0)
+    private val launchOrdinal = registerLaunch()
     private val _updateStatus = MutableStateFlow(UpdateStatus())
 
     val entries: StateFlow<List<DiaryEntry>> = repository.entries.stateIn(
@@ -31,7 +33,11 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
     val updateStatus = _updateStatus.asStateFlow()
 
     init {
-        viewModelScope.launch { repository.refreshDurableStorageAccess() }
+        viewModelScope.launch {
+            runCatching { repository.ensureMediaIsolation() }
+            runCatching { repository.refreshDurableStorageAccess() }
+            checkForUpdatesInternal(showStartupPrompt = true)
+        }
     }
 
     fun save(
@@ -73,24 +79,52 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun checkForUpdates() {
+        viewModelScope.launch { checkForUpdatesInternal(showStartupPrompt = false) }
+    }
+
+    fun dismissStartupUpdatePrompt() {
+        _updateStatus.value = _updateStatus.value.copy(promptVisible = false)
+    }
+
+    fun skipStartupUpdatePrompt() {
+        val update = _updateStatus.value.available ?: return
+        updatePreferences.edit()
+            .putInt(KEY_SKIPPED_VERSION_CODE, update.versionCode)
+            .putLong(KEY_SKIP_UNTIL_LAUNCH, launchOrdinal + SKIP_LAUNCH_COUNT)
+            .apply()
+        _updateStatus.value = _updateStatus.value.copy(
+            promptVisible = false,
+            message = "已跳过本版本启动提醒 100 次",
+        )
+    }
+
+    fun acceptStartupUpdatePrompt() {
+        _updateStatus.value = _updateStatus.value.copy(promptVisible = false)
+        downloadAndInstallUpdate()
+    }
+
+    private suspend fun checkForUpdatesInternal(showStartupPrompt: Boolean) {
         val current = _updateStatus.value
         if (current.checking || current.downloading) return
         _updateStatus.value = current.copy(checking = true, message = "正在检查更新…")
-        viewModelScope.launch {
-            runCatching { updater.check() }
-                .onSuccess { update ->
-                    _updateStatus.value = if (update.versionCode > BuildConfig.VERSION_CODE) {
-                        UpdateStatus(available = update, message = "发现 LifeTrace ${update.versionName}")
-                    } else {
-                        UpdateStatus(message = "已是最新版本 ${BuildConfig.VERSION_NAME}")
-                    }
-                }
-                .onFailure { error ->
-                    _updateStatus.value = UpdateStatus(
-                        message = "检查失败：${error.message ?: "网络错误"}",
+        runCatching { updater.check() }
+            .onSuccess { update ->
+                _updateStatus.value = if (update.versionCode > BuildConfig.VERSION_CODE) {
+                    UpdateStatus(
+                        available = update,
+                        promptVisible = showStartupPrompt && shouldShowStartupPrompt(update.versionCode),
+                        message = "发现 LifeTrace " + update.versionName,
                     )
+                } else {
+                    clearObsoleteSkip(update.versionCode)
+                    UpdateStatus(message = "已是最新版本 " + BuildConfig.VERSION_NAME)
                 }
-        }
+            }
+            .onFailure { error ->
+                _updateStatus.value = UpdateStatus(
+                    message = "检查失败：" + (error.message ?: "网络错误"),
+                )
+            }
     }
 
     fun downloadAndInstallUpdate() {
@@ -99,14 +133,15 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
         _updateStatus.value = _updateStatus.value.copy(
             downloading = true,
             progress = 0,
-            message = "正在下载 ${update.versionName}…",
+            promptVisible = false,
+            message = "正在下载 " + update.versionName + "…",
         )
         viewModelScope.launch {
             runCatching {
                 updater.download(update) { progress ->
                     _updateStatus.value = _updateStatus.value.copy(
                         progress = progress,
-                        message = "正在下载 ${update.versionName} · $progress%",
+                        message = "正在下载 " + update.versionName + " · " + progress + "%",
                     )
                 }
             }.onSuccess { file ->
@@ -125,7 +160,7 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
                 _updateStatus.value = _updateStatus.value.copy(
                     downloading = false,
                     progress = null,
-                    message = "更新失败：${error.message ?: "下载错误"}",
+                    message = "更新失败：" + (error.message ?: "下载错误"),
                 )
             }
         }
@@ -145,5 +180,34 @@ class LifeTraceViewModel(application: Application) : AndroidViewModel(applicatio
         _updateStatus.value = _updateStatus.value.copy(
             message = if (launched) "已打开系统安装器" else "请先允许“安装未知应用”",
         )
+    }
+
+    private fun registerLaunch(): Long {
+        val next = updatePreferences.getLong(KEY_LAUNCH_COUNT, 0L) + 1L
+        updatePreferences.edit().putLong(KEY_LAUNCH_COUNT, next).apply()
+        return next
+    }
+
+    private fun shouldShowStartupPrompt(versionCode: Int): Boolean {
+        val skippedVersion = updatePreferences.getInt(KEY_SKIPPED_VERSION_CODE, -1)
+        val skipUntil = updatePreferences.getLong(KEY_SKIP_UNTIL_LAUNCH, -1L)
+        return !(skippedVersion == versionCode && launchOrdinal <= skipUntil)
+    }
+
+    private fun clearObsoleteSkip(latestVersionCode: Int) {
+        val skippedVersion = updatePreferences.getInt(KEY_SKIPPED_VERSION_CODE, -1)
+        if (skippedVersion <= latestVersionCode && latestVersionCode <= BuildConfig.VERSION_CODE) {
+            updatePreferences.edit()
+                .remove(KEY_SKIPPED_VERSION_CODE)
+                .remove(KEY_SKIP_UNTIL_LAUNCH)
+                .apply()
+        }
+    }
+
+    private companion object {
+        const val KEY_LAUNCH_COUNT = "launch_count"
+        const val KEY_SKIPPED_VERSION_CODE = "skipped_version_code"
+        const val KEY_SKIP_UNTIL_LAUNCH = "skip_until_launch"
+        const val SKIP_LAUNCH_COUNT = 100L
     }
 }

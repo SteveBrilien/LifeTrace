@@ -29,28 +29,53 @@ data class UpdateStatus(
     val progress: Int? = null,
     val available: AppUpdate? = null,
     val downloadedPath: String? = null,
+    val promptVisible: Boolean = false,
     val message: String = "尚未检查更新",
 )
 
 class AppUpdater(private val context: Context) {
     suspend fun check(): AppUpdate = withContext(Dispatchers.IO) {
-        val connection = (URL(BuildConfig.UPDATE_MANIFEST_URL).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 15_000
+        val candidates = listOf(
+            BuildConfig.UPDATE_MANIFEST_URL,
+            BuildConfig.UPDATE_MANIFEST_FALLBACK_URL,
+        ).filter { it.isNotBlank() }.distinct()
+
+        var lastError: Throwable? = null
+        for (manifestUrl in candidates) {
+            try {
+                return@withContext loadManifest(manifestUrl)
+            } catch (error: Throwable) {
+                lastError = error
+            }
+        }
+        throw lastError ?: IllegalStateException("没有可用的更新源")
+    }
+
+    private fun loadManifest(manifestUrl: String): AppUpdate {
+        val manifestUri = Uri.parse(manifestUrl)
+        require(manifestUri.scheme == "https") { "更新清单必须使用 HTTPS" }
+        require(manifestUri.host in ALLOWED_MANIFEST_HOSTS) { "更新清单来源未授权" }
+
+        val connection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 8_000
+            readTimeout = 12_000
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "LifeTrace/${BuildConfig.VERSION_NAME}")
+            setRequestProperty("Cache-Control", "no-cache")
+            setRequestProperty("User-Agent", "LifeTrace/" + BuildConfig.VERSION_NAME)
         }
         try {
-            require(connection.responseCode in 200..299) { "更新服务器返回 HTTP ${connection.responseCode}" }
+            require(connection.responseCode in 200..299) {
+                "更新服务器返回 HTTP " + connection.responseCode
+            }
             val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             val url = json.getString("apkUrl")
             val parsedUrl = Uri.parse(url)
             val sha256 = json.getString("sha256").lowercase()
             require(parsedUrl.scheme == "https") { "更新包必须使用 HTTPS" }
-            require(parsedUrl.host == "trace.wmy-cloud.cn") { "更新包必须来自 trace.wmy-cloud.cn" }
+            require(parsedUrl.host in ALLOWED_APK_HOSTS) { "更新包来源未授权" }
             require(sha256.matches(Regex("[0-9a-f]{64}"))) { "更新清单 SHA-256 格式无效" }
-            AppUpdate(
+            return AppUpdate(
                 versionCode = json.getInt("versionCode"),
                 versionName = json.getString("versionName"),
                 apkUrl = url,
@@ -64,16 +89,16 @@ class AppUpdater(private val context: Context) {
 
     suspend fun download(update: AppUpdate, onProgress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
         val root = File(context.externalCacheDir ?: context.cacheDir, "updates").apply { mkdirs() }
-        val target = File(root, "LifeTrace-${update.versionName}.apk")
+        val target = File(root, "LifeTrace-" + update.versionName + ".apk")
         val partial = File(root, target.name + ".part")
         val connection = (URL(update.apkUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 30_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "LifeTrace/${BuildConfig.VERSION_NAME}")
+            setRequestProperty("User-Agent", "LifeTrace/" + BuildConfig.VERSION_NAME)
         }
         try {
-            require(connection.responseCode in 200..299) { "APK 下载返回 HTTP ${connection.responseCode}" }
+            require(connection.responseCode in 200..299) { "APK 下载返回 HTTP " + connection.responseCode }
             val total = connection.contentLengthLong
             var copied = 0L
             connection.inputStream.use { input ->
@@ -102,12 +127,14 @@ class AppUpdater(private val context: Context) {
     fun launchInstaller(file: File): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
             context.startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + context.packageName),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
             return false
         }
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
         context.startActivity(
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
@@ -128,5 +155,16 @@ class AppUpdater(private val context: Context) {
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        val ALLOWED_MANIFEST_HOSTS = setOf(
+            "trace.wmy-cloud.cn",
+            "raw.githubusercontent.com",
+        )
+        val ALLOWED_APK_HOSTS = setOf(
+            "trace.wmy-cloud.cn",
+            "mcp.wmy-cloud.cn",
+        )
     }
 }

@@ -21,12 +21,13 @@ android {
         applicationId = "com.lifetrace.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.3.5"
+        versionCode = 9
+        versionName = "0.3.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"https://trace.wmy-cloud.cn/update.json\"")
+        buildConfigField("String", "UPDATE_MANIFEST_FALLBACK_URL", "\"https://raw.githubusercontent.com/SteveBrilien/LifeTrace/main/update.json\"")
     }
 
     signingConfigs {

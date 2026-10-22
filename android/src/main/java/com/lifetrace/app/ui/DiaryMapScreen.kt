@@ -1,6 +1,7 @@
 package com.lifetrace.app.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,12 +28,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -47,15 +51,21 @@ import java.io.File
 import java.util.Locale
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.FillExtrusionLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionBase
+import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionColor
+import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionHeight
+import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineCap
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineJoin
@@ -63,8 +73,11 @@ import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
 import org.maplibre.android.style.layers.PropertyFactory.textField
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+import org.maplibre.geojson.Polygon
 
 
 enum class MapLabelLanguage(val storedValue: String, val label: String) {
@@ -97,6 +110,7 @@ fun DiaryMapScreen(
         else -> false
     }
     var rangeDays by rememberSaveable { mutableIntStateOf(0) }
+    var elevation3d by rememberSaveable { mutableStateOf(false) }
     val now = System.currentTimeMillis()
     val locatedEntries = remember(entries, rangeDays) {
         entries.filter { entry ->
@@ -105,6 +119,11 @@ fun DiaryMapScreen(
         }
     }
     val trackAnalysis = remember(locatedEntries) { analyzeTrack(locatedEntries) }
+    val elevatedEntries = remember(locatedEntries) {
+        locatedEntries
+            .filter { it.altitudeMeters?.isFinite() == true }
+            .sortedBy { it.occurredAt }
+    }
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply { onCreate(null) }
@@ -127,11 +146,19 @@ fun DiaryMapScreen(
         }
     }
 
-    LaunchedEffect(locatedEntries.map { it.id to it.updatedAt }, darkMap, labelLanguage) {
+    LaunchedEffect(
+        locatedEntries.map { Triple(it.id, it.updatedAt, it.altitudeMeters) },
+        darkMap,
+        labelLanguage,
+        elevation3d,
+    ) {
         mapView.getMapAsync { map ->
             map.setStyle(Style.Builder().fromUri(MAP_STYLE_LIGHT_URL)) { style ->
                 if (darkMap) applySoftDarkPalette(style)
                 applyMapLabelLanguage(style, labelLanguage)
+                if (elevation3d && elevatedEntries.isNotEmpty()) {
+                    addElevationExtrusions(style, elevatedEntries)
+                }
                 map.clear()
                 locatedEntries.forEach { entry ->
                     map.addMarker(
@@ -162,7 +189,7 @@ fun DiaryMapScreen(
                     0 -> Unit
                     1 -> {
                         val entry = locatedEntries.first()
-                        map.animateCamera(
+                        map.moveCamera(
                             CameraUpdateFactory.newLatLngZoom(
                                 LatLng(entry.latitude!!, entry.longitude!!),
                                 16.0,
@@ -175,9 +202,12 @@ fun DiaryMapScreen(
                                 include(LatLng(it.latitude!!, it.longitude!!))
                             }
                         }.build()
-                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 96))
+                        map.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, 96))
                     }
                 }
+                map.cameraPosition = CameraPosition.Builder(map.cameraPosition)
+                    .tilt(if (elevation3d) 52.0 else 0.0)
+                    .build()
             }
         }
     }
@@ -195,6 +225,11 @@ fun DiaryMapScreen(
                     label = { Text(label) },
                 )
             }
+            FilterChip(
+                selected = elevation3d,
+                onClick = { elevation3d = !elevation3d },
+                label = { Text("3D") },
+            )
         }
 
         if (trackAnalysis.suspiciousSegmentCount > 0) {
@@ -207,12 +242,21 @@ fun DiaryMapScreen(
                 ),
             ) {
                 Text(
-                    text = "检测到 ${trackAnalysis.suspiciousSegmentCount} 段疑似位置跳变，仅提示、不修改原始记录。",
+                    text = "检测到 ${trackAnalysis.suspiciousSegmentCount} 段极端位置跳变；已自动忽略高空点和常见飞行速度。",
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
             }
+        }
+
+        if (elevation3d && elevatedEntries.isNotEmpty()) {
+            ElevationProfileCard(
+                entries = elevatedEntries,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 12.dp, end = 12.dp, bottom = 136.dp),
+            )
         }
 
         if (locatedEntries.isEmpty()) {
@@ -319,15 +363,29 @@ private fun analyzeTrack(entries: List<DiaryEntry>): TrackAnalysis {
 }
 
 private fun isSuspiciousJump(first: DiaryEntry, second: DiaryEntry): Boolean {
-    val elapsedHours = (second.occurredAt - first.occurredAt) / 3_600_000.0
-    if (elapsedHours <= 0.0 || elapsedHours > 6.0) return false
+    val elapsedMinutes = (second.occurredAt - first.occurredAt) / 60_000.0
+    if (elapsedMinutes <= 0.0 || elapsedMinutes > 15.0) return false
+
+    // GPS altitude lets us explicitly avoid classifying in-flight records as bad fixes.
+    if (
+        (first.altitudeMeters ?: Double.NEGATIVE_INFINITY) >= FLIGHT_ALTITUDE_METERS ||
+        (second.altitudeMeters ?: Double.NEGATIVE_INFINITY) >= FLIGHT_ALTITUDE_METERS
+    ) {
+        return false
+    }
+
     val distanceKm = haversineKm(
         first.latitude!!,
         first.longitude!!,
         second.latitude!!,
         second.longitude!!,
     )
-    return distanceKm >= 50.0 && distanceKm / elapsedHours > 1_000.0
+    val elapsedHours = elapsedMinutes / 60.0
+    val speedKmh = distanceKm / elapsedHours
+
+    // Only flag clearly impossible teleports. Ordinary air travel should no longer trip this.
+    return (elapsedMinutes <= 2.0 && distanceKm >= 30.0) ||
+        (distanceKm >= 80.0 && speedKmh >= 1_800.0)
 }
 
 private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -337,6 +395,123 @@ private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double):
         kotlin.math.cos(Math.toRadians(lat1)) * kotlin.math.cos(Math.toRadians(lat2)) *
         kotlin.math.sin(dLon / 2) * kotlin.math.sin(dLon / 2)
     return 6_371.0 * 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+}
+
+private fun addElevationExtrusions(style: Style, entries: List<DiaryEntry>) {
+    val features = entries.mapNotNull { entry ->
+        val latitude = entry.latitude ?: return@mapNotNull null
+        val longitude = entry.longitude ?: return@mapNotNull null
+        val altitude = entry.altitudeMeters ?: return@mapNotNull null
+        if (!altitude.isFinite()) return@mapNotNull null
+
+        val latRadius = 0.00020
+        val lonRadius = latRadius / kotlin.math.cos(Math.toRadians(latitude))
+            .coerceAtLeast(0.15)
+        val ring = listOf(
+            Point.fromLngLat(longitude - lonRadius, latitude - latRadius),
+            Point.fromLngLat(longitude + lonRadius, latitude - latRadius),
+            Point.fromLngLat(longitude + lonRadius, latitude + latRadius),
+            Point.fromLngLat(longitude - lonRadius, latitude + latRadius),
+            Point.fromLngLat(longitude - lonRadius, latitude - latRadius),
+        )
+        Feature.fromGeometry(Polygon.fromLngLats(listOf(ring))).apply {
+            addNumberProperty(
+                ELEVATION_HEIGHT_PROPERTY,
+                altitude.coerceIn(0.0, MAX_ELEVATION_METERS),
+            )
+        }
+    }
+    if (features.isEmpty()) return
+
+    style.addSource(
+        GeoJsonSource(
+            ELEVATION_SOURCE_ID,
+            FeatureCollection.fromFeatures(features),
+        ),
+    )
+    style.addLayer(
+        FillExtrusionLayer(ELEVATION_LAYER_ID, ELEVATION_SOURCE_ID).withProperties(
+            fillExtrusionColor(ELEVATION_COLOR),
+            fillExtrusionOpacity(0.72f),
+            fillExtrusionBase(0f),
+            fillExtrusionHeight(Expression.get(ELEVATION_HEIGHT_PROPERTY)),
+        ),
+    )
+}
+
+@Composable
+private fun ElevationProfileCard(
+    entries: List<DiaryEntry>,
+    modifier: Modifier = Modifier,
+) {
+    val altitudes = entries.mapNotNull { it.altitudeMeters?.takeIf { value -> value.isFinite() } }
+    if (altitudes.isEmpty()) return
+
+    val minAltitude = altitudes.minOrNull() ?: 0.0
+    val maxAltitude = altitudes.maxOrNull() ?: minAltitude
+    val span = (maxAltitude - minAltitude).coerceAtLeast(1.0)
+    val lineColor = MaterialTheme.colorScheme.primary
+    val guideColor = MaterialTheme.colorScheme.outlineVariant
+
+    Card(
+        modifier = modifier.fillMaxWidth().height(92.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.94f),
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = buildString {
+                    append("高程 · ")
+                    append(altitudes.size)
+                    append(" 点 · ")
+                    append(minAltitude.toInt())
+                    append("–")
+                    append(maxAltitude.toInt())
+                    append(" m")
+                    if (maxAltitude >= FLIGHT_ALTITUDE_METERS) append(" · 含高空段")
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+            ) {
+                drawLine(
+                    color = guideColor,
+                    start = Offset(0f, size.height - 1f),
+                    end = Offset(size.width, size.height - 1f),
+                    strokeWidth = 1f,
+                )
+                if (altitudes.size == 1) {
+                    drawCircle(
+                        color = lineColor,
+                        radius = 4f,
+                        center = Offset(size.width / 2f, size.height / 2f),
+                    )
+                } else {
+                    altitudes.zipWithNext().forEachIndexed { index, pair ->
+                        val x1 = size.width * index / (altitudes.lastIndex.toFloat())
+                        val x2 = size.width * (index + 1) / (altitudes.lastIndex.toFloat())
+                        val y1 = size.height * (1f - ((pair.first - minAltitude) / span).toFloat())
+                        val y2 = size.height * (1f - ((pair.second - minAltitude) / span).toFloat())
+                        drawLine(
+                            color = lineColor,
+                            start = Offset(x1, y1),
+                            end = Offset(x2, y2),
+                            strokeWidth = 4f,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun applyMapLabelLanguage(style: Style, language: MapLabelLanguage) {
@@ -391,3 +566,9 @@ private const val DAY_MILLIS = 86_400_000L
 private const val TRACK_SOURCE_ID = "lifetrace-diary-track-source"
 private const val TRACK_LAYER_ID = "lifetrace-diary-track-layer"
 private const val TRACK_COLOR = "#3157D5"
+private const val ELEVATION_SOURCE_ID = "lifetrace-elevation-source"
+private const val ELEVATION_LAYER_ID = "lifetrace-elevation-layer"
+private const val ELEVATION_HEIGHT_PROPERTY = "heightMeters"
+private const val ELEVATION_COLOR = "#5C7CFA"
+private const val MAX_ELEVATION_METERS = 15_000.0
+private const val FLIGHT_ALTITUDE_METERS = 1_500.0

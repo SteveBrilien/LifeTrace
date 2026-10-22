@@ -177,6 +177,40 @@ fun LifeTraceApp(
         route = if (route == "editor" && selectedEntryId != null) "detail" else "home"
     }
 
+    updateStatus.available?.takeIf { updateStatus.promptVisible }?.let { update ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissStartupUpdatePrompt,
+            title = { Text("发现 LifeTrace " + update.versionName) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("有新版本可以直接在应用内下载并安装。")
+                    if (update.notes.isNotBlank()) {
+                        Text(
+                            text = update.notes,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = "选择“跳过”后，同一版本在接下来 100 次启动中不会再次弹窗。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::acceptStartupUpdatePrompt) {
+                    Text("立即更新")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::skipStartupUpdatePrompt) {
+                    Text("跳过 100 次")
+                }
+            },
+        )
+    }
+
     when (route) {
         "editor" -> DiaryEditorScreen(
             entry = selectedEntry,
@@ -541,6 +575,7 @@ private fun DiaryEditorScreen(
     }
     var latitude by rememberSaveable(entry?.id) { mutableStateOf(entry?.latitude) }
     var longitude by rememberSaveable(entry?.id) { mutableStateOf(entry?.longitude) }
+    var altitudeMeters by rememberSaveable(entry?.id) { mutableStateOf(entry?.altitudeMeters) }
     var placeLabel by rememberSaveable(entry?.id) { mutableStateOf(entry?.placeLabel.orEmpty()) }
     var retainedIds by remember(entry?.id) {
         mutableStateOf(entry?.photos?.map { it.id }.orEmpty())
@@ -578,6 +613,7 @@ private fun DiaryEditorScreen(
         } else {
             latitude = location.latitude
             longitude = location.longitude
+            altitudeMeters = location.altitude.takeIf { location.hasAltitude() && it.isFinite() }
         }
     }
 
@@ -617,6 +653,7 @@ private fun DiaryEditorScreen(
                                     occurredAt = occurredAt,
                                     latitude = latitude,
                                     longitude = longitude,
+                                    altitudeMeters = altitudeMeters,
                                     placeLabel = placeLabel,
                                     retainedPhotoIds = retainedIds,
                                     newPhotoUris = newUris,
@@ -696,7 +733,14 @@ private fun DiaryEditorScreen(
                 Spacer(Modifier.height(8.dp))
                 if (latitude != null && longitude != null) {
                     Text(
-                        text = formatCoordinates(latitude, longitude),
+                        text = buildString {
+                            append(formatCoordinates(latitude, longitude))
+                            altitudeMeters?.let {
+                                append("  ·  海拔 ")
+                                append(it.toInt())
+                                append(" m")
+                            }
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -734,6 +778,7 @@ private fun DiaryEditorScreen(
                             onClick = {
                                 latitude = null
                                 longitude = null
+                                altitudeMeters = null
                             },
                         ) {
                             Text("清除坐标")
@@ -940,7 +985,14 @@ private fun DiaryDetailScreen(
                             )
                             if (entry.latitude != null) {
                                 Text(
-                                    text = formatCoordinates(entry.latitude, entry.longitude),
+                                    text = buildString {
+                                        append(formatCoordinates(entry.latitude, entry.longitude))
+                                        entry.altitudeMeters?.let {
+                                            append("  ·  海拔 ")
+                                            append(it.toInt())
+                                            append(" m")
+                                        }
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }

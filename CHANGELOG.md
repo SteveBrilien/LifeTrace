@@ -108,3 +108,18 @@ Files:
 - `android/src/main/java/com/lifetrace/app/ui/LifeTraceApp.kt`
 - `android/src/main/java/com/lifetrace/app/ui/DiaryMapScreen.kt`
 - `android/src/main/java/com/lifetrace/app/ui/MapStylePalette.kt`
+
+## 2026-10-22T05:40:56.236923Z — UPDATE: LifeTrace 0.3.6: flight-aware track warnings, altitude profile/3D markers, private photo migration, startup updater
+
+Added nullable altitudeMeters to diary records with Room 1→2 migration; location capture persists device altitude. Map jump heuristic now flags only extreme teleports within 15 minutes and suppresses high-altitude flight segments. Added optional 3D camera tilt, extruded elevation columns at points with altitude metadata, and an elevation profile. Added one-time migration of legacy photo paths to private filesDir/media copies, safe deletion restricted to app-managed paths, backup .nomedia, and skip unchanged durable backups on launch to avoid rewriting photo mtimes. Startup update check supports trace.wmy-cloud.cn plus raw GitHub manifest fallback; update prompt shows release notes and allows skipping the same version for 100 launches. The current build compiles; the update host trace.wmy-cloud.cn still has TLS handshake errors and must be validated after publishing the fallback manifest.
+
+Files:
+- `android/build.gradle.kts`
+- `android/src/main/java/com/lifetrace/app/data/AppUpdater.kt`
+- `android/src/main/java/com/lifetrace/app/data/DiaryRepository.kt`
+- `android/src/main/java/com/lifetrace/app/data/DurableBackupStore.kt`
+- `android/src/main/java/com/lifetrace/app/data/LifeTraceDatabase.kt`
+- `android/src/main/java/com/lifetrace/app/data/MediaStorage.kt`
+- `android/src/main/java/com/lifetrace/app/ui/DiaryMapScreen.kt`
+- `android/src/main/java/com/lifetrace/app/ui/LifeTraceApp.kt`
+- `android/src/main/java/com/lifetrace/app/ui/LifeTraceViewModel.kt`

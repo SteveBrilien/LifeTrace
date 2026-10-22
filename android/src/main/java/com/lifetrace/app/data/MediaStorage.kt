@@ -20,7 +20,14 @@ data class StoredPhoto(
     val height: Int,
 )
 
+data class MediaIsolationResult(
+    val photos: List<DiaryPhotoEntity>,
+    val migratedCount: Int,
+)
+
 class MediaStorage(private val context: Context) {
+    private val mediaRoot = File(context.filesDir, "media")
+
     suspend fun importPhotos(entryId: String, uriStrings: List<String>): List<StoredPhoto> =
         withContext(Dispatchers.IO) {
             uriStrings.map { importOne(entryId, Uri.parse(it)) }
@@ -53,14 +60,99 @@ class MediaStorage(private val context: Context) {
 
     suspend fun deleteFiles(photos: List<DiaryPhoto>) = withContext(Dispatchers.IO) {
         photos.forEach { photo ->
-            File(photo.originalPath).delete()
-            File(photo.thumbnailPath).delete()
+            if (isManagedPath(photo.originalPath)) File(photo.originalPath).delete()
+            if (isManagedPath(photo.thumbnailPath)) File(photo.thumbnailPath).delete()
         }
     }
 
     suspend fun deleteEntryDirectory(entryId: String) = withContext(Dispatchers.IO) {
         File(context.filesDir, "media/$entryId").deleteRecursively()
     }
+
+    suspend fun ensurePrivateCopies(
+        entryId: String,
+        photos: List<DiaryPhotoEntity>,
+    ): MediaIsolationResult = withContext(Dispatchers.IO) {
+        var migrated = 0
+        val isolated = photos.sortedBy { it.sortOrder }.map { photo ->
+            val originalFile = File(photo.originalPath)
+            val thumbnailFile = File(photo.thumbnailPath)
+            if (
+                isManagedPath(photo.originalPath) &&
+                isManagedPath(photo.thumbnailPath) &&
+                originalFile.isFile &&
+                thumbnailFile.isFile
+            ) {
+                photo
+            } else {
+                val migratedPhoto = migratePhotoToPrivateStorage(entryId, photo)
+                if (migratedPhoto != photo) migrated += 1
+                migratedPhoto
+            }
+        }
+        MediaIsolationResult(isolated, migrated)
+    }
+
+    private fun migratePhotoToPrivateStorage(
+        entryId: String,
+        photo: DiaryPhotoEntity,
+    ): DiaryPhotoEntity {
+        val extension = MimeTypeMap.getSingleton()
+            .getExtensionFromMimeType(photo.mimeType)
+            ?.takeIf { it.isNotBlank() }
+            ?: File(photo.originalPath).extension.ifBlank { "jpg" }
+        val directory = File(mediaRoot, entryId).apply { mkdirs() }
+        val targetOriginal = File(directory, photo.id + "." + extension)
+        val targetThumbnail = File(directory, photo.id + "_thumb.jpg")
+
+        return runCatching {
+            if (!sameFile(photo.originalPath, targetOriginal)) {
+                copySource(photo.originalPath, targetOriginal)
+            } else {
+                require(targetOriginal.isFile) { "原图副本不存在" }
+            }
+            createThumbnail(targetOriginal, targetThumbnail)
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(targetOriginal.absolutePath, bounds)
+            photo.copy(
+                originalPath = targetOriginal.absolutePath,
+                thumbnailPath = targetThumbnail.absolutePath,
+                width = bounds.outWidth.takeIf { it > 0 } ?: photo.width,
+                height = bounds.outHeight.takeIf { it > 0 } ?: photo.height,
+            )
+        }.getOrElse {
+            targetOriginal.takeIf { !sameFile(photo.originalPath, it) }?.delete()
+            targetThumbnail.delete()
+            photo
+        }
+    }
+
+    private fun copySource(source: String, destination: File) {
+        val uri = runCatching { Uri.parse(source) }.getOrNull()
+        if (uri?.scheme == "content") {
+            context.contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "无法读取旧照片引用" }
+                destination.outputStream().use { output -> input.copyTo(output) }
+            }
+        } else {
+            val sourceFile = File(source)
+            require(sourceFile.isFile) { "旧照片文件不存在" }
+            sourceFile.copyTo(destination, overwrite = true)
+        }
+    }
+
+    private fun isManagedPath(path: String): Boolean {
+        if (path.startsWith("content://")) return false
+        return runCatching {
+            val root = mediaRoot.canonicalFile
+            val file = File(path).canonicalFile
+            file.path == root.path || file.path.startsWith(root.path + File.separator)
+        }.getOrDefault(false)
+    }
+
+    private fun sameFile(path: String, target: File): Boolean =
+        runCatching { File(path).canonicalFile == target.canonicalFile }.getOrDefault(false)
 
     private fun importOne(entryId: String, uri: Uri): StoredPhoto {
         val resolver = context.contentResolver
