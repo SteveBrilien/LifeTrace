@@ -1,0 +1,7 @@
+{
+  "versionCode": 9,
+  "versionName": "0.3.6",
+  "apkUrl": "https://mcp.wmy-cloud.cn/artifacts/pub-1caa8cb4ee80455a952d976dc5de2e5e/LifeTrace-0.3.6.apk?exp=0&sig=4ca76acf5e72dbf661983682cd5d616911c5bb36d229a75fda0a22e795bd599a",
+  "sha256": "0947a9bce23362ac8f3fb35d58a93db105ad5af869bc6be50bd9233641a1a04a",
+  "notes": "修复飞行轨迹误报；增加可选3D高程点与高程曲线；迁移旧照片到LifeTrace私有存储，避免查看时刷新相册原件时间戳；避免每次启动重写未变化的本地备份；新增启动更新检测、版本特性弹窗和跳过该版本100次启动的选项。"
+}
